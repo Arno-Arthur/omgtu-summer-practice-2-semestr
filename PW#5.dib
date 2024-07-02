@@ -60,9 +60,7 @@ using System.Collections.Concurrent;
 var queue1 = new BlockingCollection<Message>(2); //очередь первого потока
 var queue2 = new BlockingCollection<Message>(2); //очередь второго потока
 
-<<<<<<< HEAD
-// Здесь писать решение
-=======
+
 var thread1 = new Thread(() => PingPong(queue1,queue2));
 var thread2 = new Thread(() => PingPong(queue2,queue1));
 
@@ -86,7 +84,6 @@ void PingPong(BlockingCollection<Message> qSender, BlockingCollection<Message> q
     });
 }
 var forget = queue1.Take();
->>>>>>> 52647a8 (Выполнено PW-5)
 
 #!csharp
 
