@@ -20,21 +20,108 @@
 
 #!csharp
 
-interface ICommand
+using System;
+using System.Threading;
+using System.Collections.Concurrent;
+using System.Threading.Tasks;
+
+public interface ICommand
 {
     void Execute();
 }
 
-
-public class TestCommand(int id) : ICommand
+public class TestCommand : ICommand
 {
-    int counter = 0;
+    private int counter = 0;
+    private int id;
+    private int maxExecutions;
+
+    public TestCommand(int id, int maxExecutions)
+    {
+        this.id = id;
+        this.maxExecutions = maxExecutions;
+    }
 
     public void Execute()
     {
-        Console.WriteLine($"Поток {id} вызов {++counter}");
+        for (int i = 0; i < maxExecutions; i++)
+        {
+            Console.WriteLine($"Поток {id} вызов {++counter}");
+            Thread.Sleep(250); 
+        }
     }
 }
+
+public class HardStopCommand : ICommand
+{
+    private ServerThread thread;
+
+    public HardStopCommand(ServerThread thread)
+    {
+        this.thread = thread;
+    }
+
+    public void Execute()
+    {
+        thread.Stop();
+    }
+}
+
+public class ServerThread
+{
+    private Thread thread;
+    private BlockingCollection<ICommand> queue = new BlockingCollection<ICommand>(100);
+    private bool running = true;
+
+    public ServerThread()
+    {
+        thread = new Thread(ThreadFunc);
+        thread.Start();
+    }
+
+    private void ThreadFunc()
+    {
+        while (running)
+        {
+            ICommand cmd = queue.Take();
+            cmd.Execute();
+        }
+    }
+
+    public void Put(ICommand command)
+    {
+        queue.Add(command);
+    }
+
+    public void Stop()
+    {
+        running = false;
+        queue.CompleteAdding();
+    }
+
+    public bool IsRunning()
+    {
+        return running && thread.IsAlive;
+    }
+}
+
+#!csharp
+
+ServerThread thread = new ServerThread();
+
+for (int i = 1; i <= 5; i++)
+{
+    TestCommand tc = new TestCommand(i, 3);
+    thread.Put(tc);
+}
+
+HardStopCommand hardStop = new HardStopCommand(thread);
+thread.Put(hardStop);
+
+Thread.Sleep(5000);
+
+if (!thread.IsRunning()) Console.WriteLine("Поток успешно остановлен.");
+else Console.WriteLine("Поток все еще работает.");
 
 #!markdown
 
