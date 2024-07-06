@@ -30,25 +30,204 @@
 1. Для суммирования результатов удобно воспользоваться разделяемой переменной, к которой будут прибалятся результаты вычисления прямо в самом потоке. Для синхронизации операций сложения лучше всего восользоваться [Interlocked операцией](https://learn.microsoft.com/en-us/dotnet/api/system.threading.interlocked?view=net-8.0).
 2. Основная функция долна дождаться завершения всех потоков, которые вычисляют значение на отрезках, прежде чем возвратить результат. Для этого удобнее всего использовать Примитив синхронизации Барьер](https://learn.microsoft.com/ru-ru/dotnet/standard/threading/barrier).
 
+#!markdown
+
+# Определенный интеграл (потоки)
+
 #!csharp
 
-//
-// Вычисление определенного интеграла
-//
+using System;
+using System.Threading;
+using System.Diagnostics;
+
 class DefiniteIntegral
 {
-    //
-    // a, b - границы отрезка, на котором происходит вычисление опредленного интеграла
-    // function - функция, для которой вычисляется определнный интеграл
-    // step - размер одного шага разбиения
-    // threadsNumber - число потоков, которые используются для вычислений
-    //
+    public static Stopwatch stopWatch = new Stopwatch();
+    private static double finalResult;
+    private static Barrier barrier;
+
     public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
     {
-        // отсюда надо начинать реализацию задачи
-        return 0.0;
+        stopWatch.Restart();
+        finalResult = 0.0;
+        double detailSteps = step / 10;
+        barrier = new Barrier(threadsnumber);
+        var threads = new Thread[threadsnumber];
+        
+
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            int threadIndex = i;
+            threads[i] = new Thread(() =>
+            {
+                var lres = LocalResult(a, b, function, detailSteps, threadsnumber, threadIndex);
+                Add(ref finalResult, lres);
+                barrier.SignalAndWait();
+            });
+            threads[i].Start();
+        }
+        foreach (Thread thread in threads) thread.Join();
+        stopWatch.Stop();
+        TimeSpan ts = stopWatch.Elapsed;
+        string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:00}", ts.Hours, ts.Minutes, ts.Seconds, ts.Milliseconds / 10);
+        //Console.WriteLine("RunTime " + elapsedTime);
+        return finalResult;
+    }
+
+    public static double LocalResult(double a, double b, Func<double, double> function, double step, int threadsnumber, int thread)
+    {
+        double localA = a + thread * (b - a) / threadsnumber;
+        double localB = localA + (b - a) / threadsnumber;
+        double localResult = 0.0;
+
+        for (double x = localA; x < localB; x += step) localResult += (function(x) + function(x + step)) * step / 2.0;
+
+        if (localB > b - step) localResult += (function(b - step) + function(b)) * step / 2.0;
+
+        return localResult;
+    }
+    private static void Add(ref double finalResult, double value)
+    {
+        double currentValue0;
+        double currentValue = finalResult;
+        do
+        {
+            currentValue0 = currentValue + value;
+        }
+        while (Interlocked.CompareExchange(ref finalResult, currentValue0, currentValue) != currentValue);
     }
 }
+
+#!markdown
+
+# Определенный интеграл
+
+#!csharp
+
+using System;
+using System.Diagnostics;
+
+class DefiniteIntegralNoThread
+{
+    public static Stopwatch stopWatch = new Stopwatch();
+    private static double finalResult;
+    
+
+    public static double Solve(double a, double b, Func<double, double> function, double step, int threadsnumber)
+    {
+        stopWatch.Restart();
+        finalResult = 0.0;
+        double detailSteps = step / 10;
+        
+        for (int i = 0; i < threadsnumber; i++)
+        {
+            int threadIndex = i;
+            var lres = LocalResult(a, b, function, detailSteps, threadsnumber, threadIndex);            
+            finalResult += lres;
+        }
+        
+        stopWatch.Stop();
+        TimeSpan ts = stopWatch.Elapsed;
+        string elapsedTime = String.Format("{0:00}:{1:00}:{2:00}.{3:00}", ts.Hours, ts.Minutes, ts.Seconds, ts.Milliseconds / 10);
+        //Console.WriteLine("RunTime " + elapsedTime);
+        return finalResult;
+    }
+
+    public static double LocalResult(double a, double b, Func<double, double> function, double step, int threadsnumber, int thread)
+    {
+        double localA = a + thread * (b - a) / threadsnumber;
+        double localB = localA + (b - a) / threadsnumber;
+        double localResult = 0.0;
+
+        for (double x = localA; x < localB; x += step) localResult += (function(x) + function(x + step)) * step / 2.0;
+
+        if (localB > b - step) localResult += (function(b - step) + function(b)) * step / 2.0;
+
+        return localResult;
+    }
+    
+}
+
+#!markdown
+
+## Технические данные
+
+#!csharp
+
+#r "nuget: xunit, 2.8.1"
+#r "nuget:ScottPlot, 5.0.35"
+
+using Xunit;
+using Microsoft.DotNet.Interactive.Formatting;
+
+Formatter.Register(typeof(ScottPlot.Plot), (p, w) => w.Write(((ScottPlot.Plot)p).GetImageHtml(600, 600)), HtmlFormatter.MimeType);
+
+var N = 10;
+var SIN = (double x) => Math.Sin(x);
+var dataX = new double[N];
+var dataY = new double[N];
+var optimal = Double.MaxValue;
+var optIndex = 0;
+
+List<double> stepSize = new List<double> {1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6};
+Func<double, double> sinFunc = Math.Sin;
+double count = 0;
+double timecount = 0;
+int iterations = 100;
+foreach(double i in stepSize)
+{
+    for(int j = 0; j < 10; j++)
+    {
+        Stopwatch stopwatch = new Stopwatch();
+        stopwatch.Start();
+
+        double result = DefiniteIntegral.Solve(0, 10, sinFunc, i, 1);
+
+        stopwatch.Stop();
+        
+        count += result;
+        timecount += stopwatch.ElapsedMilliseconds;
+    }
+    Console.WriteLine($"Средний результат: {count/10}, время: {timecount/10} мс, шаг: {i}");
+    count = 0;
+    timecount = 0;
+}
+Console.WriteLine("\nНа основе данных выше следует, что оптимальный шаг по времени и точности в 4 знаков после запятой - это шаг 1Е-04");
+
+for (int i = 1; i < N; i++) 
+{
+    for (int j = 0; j < 16; j++)
+    {
+        var curIntegral = DefiniteIntegral.Solve(-100, 100, SIN, 1e-4, i);
+        dataX[i] += DefiniteIntegral.stopWatch.ElapsedMilliseconds;
+        Assert.Equal(0, curIntegral, 1e-4);
+    }
+    dataX[i]/= 10;
+    dataY[i] = i;
+    if (dataX[i] < optimal)
+    {
+        optimal = dataX[i];
+        optIndex = i;
+    }
+}
+
+ScottPlot.Plot plt = new();
+plt.Add.Scatter(dataX, dataY);
+Console.WriteLine($"Оптимальное время: {optimal}, кол-во потоков: {optIndex}");
+
+var curIntegral = DefiniteIntegralNoThread.Solve(-100, 100, SIN, 1e-4, 4);
+Assert.Equal(0, curIntegral, 1e-4);
+
+var worktime = Convert.ToDouble(DefiniteIntegralNoThread.stopWatch.ElapsedMilliseconds);
+var percent = (worktime - optimal)/worktime;
+
+Console.WriteLine($"Время без потоков: {worktime}");
+Console.WriteLine($"Разница во времени {worktime - optimal}, многопоточность быстрее на {percent:P0}");
+plt
+
+#!markdown
+
+# Исходные тесты
 
 #!csharp
 
@@ -60,7 +239,13 @@ var X = (double x) => x;
 var SIN = (double x) => Math.Sin(x);
 
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, X, 1e-4, 2), 1e-4);
-
 Assert.Equal(0, DefiniteIntegral.Solve(-1, 1, SIN, 1e-5, 8), 1e-4);
+Assert.Equal(50, DefiniteIntegral.Solve(0, 10, X, 1e-6, 8), 1e-5);
 
-Assert.Equal(10, DefiniteIntegral.Solve(0, 5, X, 1e-6, 8), 1e-5);
+#!markdown
+
+# Summary
+1. Оптимальный шаг - 1E-4 
+2. Отимальное кол-во потоков - 8
+3. Разница во времени - 61 %
+
